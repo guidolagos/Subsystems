@@ -10,6 +10,8 @@ const CLASSES_DIR = joinpath(OUTPUT_DIR, "classes")
 const SWEEP_DIR = joinpath(OUTPUT_DIR, "sweep")
 const THRESH_DIR = joinpath(OUTPUT_DIR, "thresholds")
 const BENCH_DIR = joinpath(OUTPUT_DIR, "benchmark")
+const POLICIES_DIR = joinpath(OUTPUT_DIR, "policies")
+const POLICIES_LARGE_DIR = joinpath(OUTPUT_DIR, "policies_large")
 
 include("systems.jl")
 include("signatures.jl")
@@ -17,6 +19,7 @@ include("models.jl")
 include("sweep.jl")
 include("thresholds.jl")
 include("grid.jl")
+include("policies.jl")
 
 # systems
 export TwoTerminalSystem, ncomponents, nnodes, load_systems, get_system, parse_yeh_raw
@@ -36,5 +39,10 @@ export ModelTables, model_tables, class_mttf, expected_order_statistics, Thresho
 export GRID_PATH, GRID_BETAS, ROWS_PER_SYSTEM, COST_RATIOS, COST_SETUPS, CURVE_GAMMAS,
        THRESH_VERSION, THRESH_HEADER, make_grid, write_grid, read_grid, thresh_path, curve_path,
        breaks_path, read_threshold_output, write_threshold_outputs, sweep_system, run_system
+# benchmark policies: r-out-of-n, optimal count-based and state-based (no delay)
+export Costs, repair_cost, failure_cost, dinkelbach, CountModel, count_pass, rout_ltmc, is_threshold,
+       policy_string, StatePhi, state_pass, state_calls_string, mixed_levels, POLICIES_VERSION,
+       POLICIES_HEADER, POLICIES_DIR, POLICIES_LARGE_DIR, policies_path, run_policies_row,
+       read_policies_output
 
 end # module

@@ -142,9 +142,61 @@ per-state MTTF against the classes (`output/benchmark/sweep_<name>.csv`):
     sbatch --array=1-12,14-18,20,22 templates/benchmark_sweep.sbatch
     sbatch --array=13,19,21 --mem=24G --time=12:00:00 templates/benchmark_sweep.sbatch
 
+## Benchmark policies (no delay)
+
+`src/policies.jl`, for every grid row and the same 45 cost pairs: the best
+r-out-of-n policy (repair when r components have failed or the system failed),
+the optimal count-based policy, and the optimal state-based policy π* of the
+paper ("Optimal policy" in Section sec:policies: all state-based policies that
+repair at failed states and continue at 1), all by Dinkelbach's method. The
+state-based pass visits the 2^n states by levels, with level sums over sub-states
+obtained from the sons (as in Lemma lemma:Wk), two levels in memory: about
+4 (w+1) binomial(n, w) Float64 values (~0.5 GB for n = 23, ~10 GB for n = 27).
+
+Output `output/policies/row_<id>.csv` (`# policies_version`), one line per cost pair:
+`ltmc_best_gamma`, `best_gamma` (best MTTF-threshold policy), `best_r`, `ltmc_best_r`,
+`ltmc_r1`, `ltmc_gamma1`, `ltmc_corrective`, `ltmc_count`, `count_policy` (`R` repair,
+`.` continue, `-` unreachable, for f = 0..n-1), `count_threshold` (whether it is an
+r-out-of-n policy), `ltmc_state`, `state_mixed_levels` (levels f where π* repairs at
+some but not all working states), `state_repairs` (repairs/working states per
+f = 1..n-1). State-based for n <= 23 in the main run (NaN otherwise); for
+n = 24, 26, 27 (systems 20, 14, 17) in `output/policies_large/`; not for n = 30.
+
+Every row checks state <= count <= best r-out-of-n and state <= best
+MTTF-threshold, and that the r = n policy (computed with the count chain) equals
+γ -> 0+ (computed from the classes), and r = 1 equals γ = 1 when γ = 1 continues
+only at 1 (all systems except 6D, where 15 other states have m(x) = m(1) because
+they differ from 1 only in irrelevant components).
+
+Validation: `test/reference/policies_reference.py` follows the paper literally,
+with explicit sums over all sub-states: policies evaluated with sys:m rep and
+sys:c rep, π* by the algorithm of the paper and, for the bridge, by brute force
+over all 2^15 state-based policies; count-based optimum by brute force over all
+sets of counts; 72 cases (systems 1, 3, 9, 6D). `policies_port.py` is a Float64
+port of the level-sum design (agrees to 1.4e-15). `Pkg.test()` compares the Julia
+code with the reference (relative tolerance 1e-10) and checks that the state pass,
+forced to follow π^γ, reproduces the threshold curves.
+
+### Run on the cluster
+
+    git pull
+    module purge; module load softwares; module load Julia/1.10.4-linux-x86_64
+    srun --partition=compute-slim --ntasks=1 --cpus-per-task=1 --mem=4G --time=00:30:00 \
+        julia --project=. -e 'using Pkg; Pkg.precompile(); Pkg.test()'
+    # pilot: one row of system 22 (n = 23, the largest state-based case of the main run)
+    srun --partition=compute-slim --ntasks=1 --cpus-per-task=1 --mem=4G --time=01:00:00 \
+        julia --project=. scripts/run_policies.jl 1 1 --rows=652:652 --verbose
+    sbatch templates/policies.sbatch                       # all 682 rows, 40 tasks
+    grep -l "FAILED" logs/policies_*.out
+    ls output/policies | wc -l                             # 682
+    srun --partition=compute-slim --ntasks=1 --mem=1G --time=00:10:00 \
+        julia --project=. scripts/summarize_policies.jl    # output/policies_summary.csv
+
+The output of the pilot row is kept (the array job skips it).
+
 ## Layout
 
-- `src/` reusable code (systems, signatures, failure models, per-state sweep, threshold policies, grid)
+- `src/` reusable code (systems, signatures, failure models, per-state sweep, threshold policies, grid, benchmark policies)
 - `scripts/` entry points
 - `templates/` Slurm job templates
 - `data/systems/` system definitions; `data/signatures/` computed signatures; `data/grid.csv` experiment grid (all committed)

@@ -425,4 +425,99 @@ end
                          rows = 1:3, verbose = false) == (0, 3, 0)
     end
 
+
+    @testset "benchmark policies vs independent reference (test/reference/policies_reference.csv)" begin
+        header, rows = Subsystems.read_simple_csv(joinpath(@__DIR__, "reference", "policies_reference.csv"))
+        col(name) = findfirst(==(name), header)
+        @test length(rows) == 72
+        phis = Dict{Int,StatePhi}()
+        for r in rows
+            id = parse(Int, r[col("system")])
+            sys = get_system(systems, id)
+            n = ncomponents(sys)
+            mt = model_tables(lfmo_model(r[col("model")], r[col("beta")]), n)
+            cm = CountModel(read_signature_file(signature_path(sys)).W, mt)
+            costs = Costs(n; ratio = parse(Float64, r[col("ratio")]), setup = parse(Float64, r[col("setup")]))
+            Lr = rout_ltmc(cm, costs)
+            @test argmin(Lr) == parse(Int, r[col("best_r")])
+            @test isapprox(minimum(Lr), parse(Float64, r[col("ltmc_best_r")]); rtol = 1e-10)
+            @test isapprox(Lr[1], parse(Float64, r[col("ltmc_r1")]); rtol = 1e-10)
+            @test isapprox(Lr[n], parse(Float64, r[col("ltmc_rn")]); rtol = 1e-10)
+            gc, actc, _ = dinkelbach(g -> count_pass(cm, costs, g), minimum(Lr))
+            @test isapprox(gc, parse(Float64, r[col("ltmc_count")]); rtol = 1e-10)
+            # Dinkelbach from a poor starting value reaches the same optimum
+            @test isapprox(dinkelbach(g -> count_pass(cm, costs, g), 100.0)[1], gc; rtol = 1e-12)
+            sp = get!(() -> StatePhi(compile_system(sys)), phis, id)
+            gs, _, _ = dinkelbach(g -> state_pass(sp, mt, costs, g), gc)
+            @test isapprox(gs, parse(Float64, r[col("ltmc_state")]); rtol = 1e-10)
+            @test gs <= gc * (1 + 1e-12) <= minimum(Lr) * (1 + 1e-11)
+        end
+    end
+
+    @testset "state pass: forced MTTF-threshold policies reproduce the threshold curves" begin
+        for (id, models) in ((1, (("Exp", "0"), ("LSh", "0.2"))), (3, (("BFR", "0.5"), ("LFMO-IG", "0.5"))),
+                             (6, (("Exp", "0"), ("LFMO-C", "0.2"))))
+            sys = get_system(systems, id)
+            cs = compile_system(sys)
+            n = cs.n
+            rec = Dict{UInt64,Vector{Int}}()
+            res = sweep(cs; record = rec)
+            sp = StatePhi(cs)
+            for (name, b) in models
+                mt = model_tables(lfmo_model(name, b), n)
+                cv = threshold_curve(res, mt)
+                mx = Dict(x => class_mttf(mt, W, count_ones(x)) for (x, W) in rec if works(cs, x))
+                costs = Costs(n; ratio = 2 / 3, setup = 0.05)
+                L = curve_ltmc(cv; ratio = 2 / 3, setup = 0.05)
+                for i in unique([1, 2, length(cv.gamma) ÷ 2, length(cv.gamma) - 1, length(cv.gamma)])
+                    thr = cv.gamma[i] * cv.m1 - Subsystems.RTOL_TIES * cv.m1 * (1 + 1e-6)
+                    (rep, wk), c, l = state_pass(sp, mt, costs, 0.0; forced = (x, f) -> mx[x] < thr)
+                    @test isapprox(c / l, L[i]; rtol = 1e-11)
+                    @test sum(wk) - sum(rep) == cv.states[i]          # continuation states
+                end
+            end
+        end
+        # 6D: γ = 1 continues at the 2^4 states that differ from 1 only in irrelevant components
+        res6 = sweep(get_system(systems, 6))
+        @test threshold_curve(res6, model_tables(lfmo_model("Exp", "0"), 14)).states[1] == 16
+        @test threshold_curve(sweep(get_system(systems, 3)), model_tables(lfmo_model("Exp", "0"), 8)).states[1] == 1
+    end
+
+    @testset "count policies: helpers" begin
+        @test is_threshold(Int8[0, 0, 1, 1, -1])
+        @test !is_threshold(Int8[0, 1, 0, 1])
+        @test is_threshold(Int8[0, 0, 0])
+        @test policy_string(Int8[0, 1, -1]) == ".R-"
+        @test mixed_levels([0, 2, 0, 3], [1, 2, 4, 5]) == 1
+        @test state_calls_string([0, 1, 2, 0], [1, 3, 4, 0]) == "1/3;2/4"
+    end
+
+    @testset "benchmark policies: grid rows" begin
+        grid = read_grid()
+        dir, cdir, sdir = mktempdir(), mktempdir(), mktempdir()
+        cache = Dict()
+        for r in grid[1:3]
+            @test run_policies_row(r; systems = systems, dir = dir, classes_dir = cdir, sweep_dir = sdir,
+                                   cache = cache) == :done
+        end
+        @test run_policies_row(grid[1]; systems = systems, dir = dir, classes_dir = cdir, sweep_dir = sdir) == :skipped
+        meta, header, rows = read_policies_output(policies_path(2; dir = dir))
+        @test header == POLICIES_HEADER && length(rows) == length(COST_RATIOS) * length(COST_SETUPS)
+        @test meta["model"] == "LFMO-C" && meta["state_based"] == "true" && meta["states_gamma1"] == "1"
+        col(name) = findfirst(==(name), header)
+        for f in rows
+            Ls, Lc, Lr, Lg = parse.(Float64, (f[col("ltmc_state")], f[col("ltmc_count")], f[col("ltmc_best_r")],
+                                              f[col("ltmc_best_gamma")]))
+            @test Ls <= Lc * (1 + 1e-9) && Lc <= Lr * (1 + 1e-9) && Ls <= Lg * (1 + 1e-9)
+            @test f[col("ltmc_r1")] == f[col("ltmc_gamma1")] || isapprox(parse(Float64, f[col("ltmc_r1")]),
+                                                                       parse(Float64, f[col("ltmc_gamma1")]); rtol = 1e-9)
+        end
+        # without the state-based optimum
+        dir2 = mktempdir()
+        @test run_policies_row(grid[1]; systems = systems, dir = dir2, classes_dir = cdir, sweep_dir = sdir,
+                               state_max_n = 4) == :done
+        meta, header, rows = read_policies_output(policies_path(1; dir = dir2))
+        @test meta["state_based"] == "false" && all(isnan(parse(Float64, f[col("ltmc_state")])) for f in rows)
+    end
+
 end
