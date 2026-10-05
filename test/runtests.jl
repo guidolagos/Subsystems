@@ -88,6 +88,29 @@ function relevant_components(sys::TwoTerminalSystem)
     return findall(rel)
 end
 
+# Naive counting vector of a state: enumerate its sub-states directly.
+function naive_counts(cs::CompiledSystem, x::UInt64)
+    w = count_ones(x)
+    W = zeros(Int, w + 1)
+    y = x
+    while true
+        works(cs, y) && (W[w - count_ones(y) + 1] += 1)
+        y == 0 && break
+        y = (y - one(UInt64)) & x
+    end
+    return W
+end
+
+function read_thresholds_reference(path)
+    header, rows = Subsystems.read_simple_csv(path)
+    col(name) = findfirst(==(name), header)
+    cases = Dict{Tuple{Int,String,String},Vector{Vector{String}}}()
+    for r in rows
+        push!(get!(cases, (parse(Int, r[col("system")]), r[col("model")], r[col("beta")]), Vector{String}[]), r)
+    end
+    return header, cases
+end
+
 @testset "Subsystems" begin
 
     @testset "known signatures" begin
@@ -243,6 +266,152 @@ end
         # BFR: binomial batches, shock rate 1/p
         R, ex = transition_rates(lfmo_model("BFR", "0.2"), 4)
         @test all(R[1, f + 1] ≈ binomial(4, f) * 0.2^f * 0.8^(4 - f) / 0.2 for f in 1:4)
+    end
+
+
+    @testset "sweep: counting vectors of all states (Lemma lemma:Wk, Algorithm alg)" begin
+        for id in (1, 3, 6, 9)
+            sys = get_system(systems, id)
+            cs = compile_system(sys)
+            n = cs.n
+            rec = Dict{UInt64,Vector{Int}}()
+            res = sweep(cs; record = rec)
+            @test length(rec) == 2^n
+            @test all(rec[x] == naive_counts(cs, x) for x in UInt64(0):UInt64(2^n - 1))
+            @test res.phi_evals == 2^n
+            @test check_sweep(res, count_working_states(cs))
+            # classes = distinct counting vectors of working states, with multiplicities
+            mult = Dict{Vector{Int},Int}()
+            for (x, W) in rec
+                works(cs, x) && (mult[W] = get(mult, W, 0) + 1)
+            end
+            @test nclasses(res) == length(mult)
+            @test all(mult[Int.(res.levels[w + 1].W[:, c])] == res.levels[w + 1].mult[c]
+                      for w in 0:n for c in eachindex(res.levels[w + 1].mult))
+            # minimal path sets: working states whose sons all fail
+            mps = count(x -> works(cs, x) && all(!works(cs, x ⊻ (UInt64(1) << e)) for e in 0:(n - 1) if (x >> e) & 1 == 1),
+                        UInt64(0):UInt64(2^n - 1))
+            @test res.mps == mps
+        end
+        # known cases
+        bridge = mksys([("Start", "1"), ("Start", "2"), ("1", "2"), ("1", "End"), ("2", "End")])
+        @test sweep(bridge).mps == 4
+        @test sweep(mksys([("Start", "a"), ("a", "b"), ("b", "End")])).mps == 1
+        @test sweep(mksys([("Start", "End"), ("Start", "End"), ("Start", "End")])).mps == 3
+        r = sweep(mksys([("Start", "a"), ("a", "b"), ("b", "End")]))
+        @test nclasses(r) == 1 && Int.(r.levels[4].W[:, 1]) == [1, 0, 0, 0]     # series: only (1,1,1) works
+    end
+
+    @testset "sweep: systems with n <= 23 agree with the committed signatures; class files" begin
+        for sys in systems
+            ncomponents(sys) <= 23 || continue
+            res = sweep(sys)
+            @test check_sweep(res, read_signature_file(signature_path(sys)).W)
+            @test sum(res.working) == sum(read_signature_file(signature_path(sys)).W)
+        end
+        res = sweep(get_system(systems, 6))
+        dir = mktempdir()
+        path = joinpath(dir, "c.bin")
+        write_classes(path, res)
+        r2 = read_classes(path)
+        @test r2.n == res.n && r2.mps == res.mps && r2.working == res.working && r2.phi_evals == res.phi_evals
+        @test all(r2.levels[w].W == res.levels[w].W && r2.levels[w].mult == res.levels[w].mult for w in eachindex(res.levels))
+        @test readdir(dir) == ["c.bin"]
+    end
+
+    @testset "model tables: δ, τ and order statistics" begin
+        n = 12
+        mt = model_tables(lfmo_model("Exp", "0"), n)
+        @test all(isapprox(mt.delta[w, k + 1], 1 / (w - k); rtol = 1e-14) for w in 1:n for k in 0:(w - 1))
+        @test all(isapprox(mt.tau[w], 1 / (w * binomial(n, w)); rtol = 1e-13) for w in 1:n)
+        for name in MODELS, b in (name == "Exp" ? ("0",) : ("0.01", "0.5"))
+            m = lfmo_model(name, b)
+            mt = model_tables(m, n)
+            R, ex = transition_rates(m, n)
+            # E T_{k:w} by the recursion eq:ETkn of the paper (nonnegative terms)
+            ET = zeros(n, n)
+            for w in 1:n, k in 1:w
+                s = 1 / ex[n - w + 1]
+                for j in 1:(k - 1)
+                    s += R[n - w + 1, n - w + j + 1] / ex[n - w + 1] * ET[w - j, k - j]
+                end
+                ET[w, k] = s
+            end
+            @test all(isapprox(expected_order_statistics(mt, w), ET[w, 1:w]; rtol = 1e-11) for w in 1:n)
+            @test mt.tau[n] ≈ 1 / Float64(psi(m, n))
+            @test all(mt.q[w, j] >= 0 for w in 1:n for j in 1:w)
+            @test all(isapprox(sum(binomial(w, j) * mt.q[w, j] for j in 1:w), mt.psi[w]; rtol = 1e-12) for w in 1:n)
+        end
+    end
+
+    @testset "threshold curves vs independent reference (test/reference/thresholds_reference.csv)" begin
+        header, cases = read_thresholds_reference(joinpath(@__DIR__, "reference", "thresholds_reference.csv"))
+        col(name) = findfirst(==(name), header)
+        cache = Dict{Int,SweepResult}()
+        @test length(cases) == 24
+        for ((id, model, beta), rows) in cases
+            sys = get_system(systems, id)
+            res = get!(() -> sweep(sys), cache, id)
+            cv = threshold_curve(res, model_tables(lfmo_model(model, beta), res.n))
+            @test length(cv.gamma) == parse(Int, rows[1][col("n_breakpoints")])
+            @test res.mps == parse(Int, rows[1][col("mps")])
+            @test isapprox(cv.m1, parse(Float64, rows[1][col("m1")]); rtol = 1e-11)
+            for r in rows
+                i = parse(Int, r[col("index")])
+                for (got, name) in ((cv.gamma[i], "gamma"), (cv.T[i], "T"), (cv.N[i], "N"), (cv.P[i], "P"))
+                    @test isapprox(got, parse(Float64, r[col(name)]); rtol = 1e-10, atol = 1e-14)
+                end
+            end
+        end
+    end
+
+    @testset "threshold curves: identities, costs, local minima" begin
+        sys = get_system(systems, 1)                  # bridge
+        res = sweep(sys)
+        cv = threshold_curve(res, model_tables(lfmo_model("Exp", "0"), 5))
+        @test cv.m1 ≈ 49 / 60                          # MTTF of the bridge with iid Exp(1)
+        @test cv.T[1] ≈ 1 / 5 && cv.N[1] ≈ 1 && cv.P[1] == 0     # γ = 1: repair at the first failure
+        @test cv.T[end] ≈ cv.m1 && cv.P[end] ≈ 1 && cv.states[end] == 16
+        L = curve_ltmc(cv; ratio = 2.0, setup = 0.1)
+        @test L[1] ≈ (0.1 + 2.0 / 5 * 1) / (1 / 5)
+        @test curve_at(cv, 0) == length(cv.gamma) && curve_at(cv, 1) == 1
+        @test curve_at(cv, cv.gamma[3]) == 3 && curve_at(cv, cv.gamma[3] + 1e-9) == 2
+        @test local_minima([3, 2, 2, 1, 2]) == 1
+        @test local_minima([1, 2, 1]) == 2
+        @test local_minima([1, 1, 1]) == 1
+        # all models on a semi-coherent system: monotone curves of T and P
+        res6 = sweep(get_system(systems, 6))
+        for name in MODELS, b in (name == "Exp" ? ("0",) : ("0.05", "0.5"))
+            cv6 = threshold_curve(res6, model_tables(lfmo_model(name, b), 14))
+            @test issorted(cv6.T) && issorted(cv6.states) && all(diff(cv6.gamma) .< 0)
+            @test all(0 .<= cv6.P .<= 1 + 1e-12)
+        end
+    end
+
+    @testset "experiment grid and row outputs" begin
+        grid = read_grid()
+        @test length(grid) == 22 * ROWS_PER_SYSTEM == 682
+        @test grid == make_grid()
+        @test all(grid[r].system == (r - 1) ÷ ROWS_PER_SYSTEM + 1 for r in eachindex(grid))
+        dir, cdir, sdir = mktempdir(), mktempdir(), mktempdir()
+        done, skipped, failed = run_system(1; grid = grid, systems = systems, dir = dir, classes_dir = cdir,
+                                           sweep_dir = sdir, rows = 1:3, verbose = false)
+        @test (done, skipped, failed) == (3, 0, 0)
+        @test isfile(joinpath(cdir, "yeh2024_01.bin")) && isfile(joinpath(sdir, "yeh2024_01.csv"))
+        meta, header, rows = read_threshold_output(thresh_path(2; dir = dir))
+        @test header == THRESH_HEADER && length(rows) == length(COST_RATIOS) * length(COST_SETUPS)
+        @test meta["model"] == "LFMO-C" && meta["beta"] == "0.01" && meta["n"] == "5"
+        meta, header, rows = read_threshold_output(curve_path(1; dir = dir))
+        @test length(rows) == length(CURVE_GAMMAS)
+        @test isfile(breaks_path(3; dir = dir))
+        # the best LTMC is the minimum over the breakpoints, below γ = 1 and corrective
+        _, h, rr = read_threshold_output(thresh_path(1; dir = dir))
+        for f in rr
+            best, g1, corr = parse.(Float64, f[findfirst(==("ltmc_best"), h):findfirst(==("ltmc_corrective"), h)])
+            @test best <= g1 && best <= corr
+        end
+        @test run_system(1; grid = grid, systems = systems, dir = dir, classes_dir = cdir, sweep_dir = sdir,
+                         rows = 1:3, verbose = false) == (0, 3, 0)
     end
 
 end

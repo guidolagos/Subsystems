@@ -66,11 +66,87 @@ component lifetime) and pairwise beta factor β = 2 − Ψ(2); the experiments u
 β ∈ {0.01, 0.05, 0.1, 0.2, 0.5}. Transition rates of the survivor-count chain
 are computed in 512-bit BigFloat.
 
+## Per-state signatures and MTTF (Algorithm alg)
+
+`src/sweep.jl` sweeps the 2^n states by number of working components and computes
+the counting vector W^x of every state from those of its sons (Lemma lemma:Wk),
+evaluating Φ once per state and keeping two levels in memory (UInt16/UInt32
+matrices, one column per state; ~9 GB for n = 30). Working states are grouped
+into classes of equal counting vector, with multiplicities: under an LFMO model
+the MTTF of a state, and its contribution to the cost of the MTTF-threshold
+policies, depend on the state only through its class. A state defines a minimal
+path set iff W^x_0 = 1 and W^x_1 = 0. Classes are cached in
+`output/classes/<name>.bin`; `output/sweep/<name>.csv` has the run time, the number
+of classes and of minimal path sets.
+
+## MTTF-threshold policies
+
+`src/thresholds.jl`: for an LFMO model, m(x) = Σ_k W^x_k/binomial(w,k) δ^w_k with
+δ^w_k = E T_{k+1:w} − E T_{k:w} computed from the survivor-count chain (nonnegative
+terms). Since m is monotone, the continuation set {m(x) ≥ γ m(1)} of π^γ is an
+up-set, and each of its states is occupied as in the chain without repairs. This
+gives, in one pass over the classes sorted by m, the mean cycle length T, the mean
+number of failed components at the repair N and the probability P that the repair
+is corrective, at every breakpoint γ of γ ↦ LTMC^γ (the distinct values m(x)/m(1)),
+and
+
+    LTMC^γ = (c_set + c_cmp N + c_sys P) / T,   c_sys = 1, c_cmp = ratio/n, c_set = setup,
+
+for the cost pairs ratio ∈ `COST_RATIOS` (1/10, 1/5, 1/2, 2/3, 1, 4/3, 2, 4, 10)
+and setup ∈ `COST_SETUPS` (0, 0.05, 0.1, 0.2, 0.5), as in the companion paper.
+
+The grid `data/grid.csv` (committed; `scripts/make_grid.jl`) has one row per
+system (22) and model (31: `Exp`, and `LFMO-C`, `LFMO-G`, `LFMO-IG`, `LFMO-S`, `BFR`,
+`LSh` with β ∈ {0.01, 0.05, 0.1, 0.2, 0.5}): 682 rows; system k owns rows
+31(k−1)+1..31k. Each row writes to `output/thresholds/`:
+
+- `row_<id>.csv`: one line per cost pair: `n_breakpoints`, the best breakpoint
+  (`best_index`, `best_gamma`; any γ in (`best_gamma_lo`, `best_gamma`] gives the same
+  policy), `ltmc_best`, `ltmc_gamma1` (γ = 1: repair at the first relevant failure),
+  `ltmc_corrective` (γ → 0+), and `local_minima` of LTMC over the breakpoints (1 = unimodal);
+- `row_<id>_curve.csv`: T, N, P at γ = 0, 0.005, ..., 1 (γ = 0 means 0+), from which
+  the curve of any cost pair can be drawn;
+- `row_<id>_breaks.csv`: all breakpoints, when there are at most 10,000.
+
+Files carry `# thresholds_version`; readers refuse other versions.
+
+Validation: `test/reference/thresholds_reference.py` follows the paper literally
+(MTTF by the recursion eq:mttf, without signatures; T, N, P from the linear systems
+sys:m rep and sys:c rep), with rates in 60-digit arithmetic; `Pkg.test()` compares
+24 cases (systems 1, 3, 6D, 9; all seven models) with relative tolerance 1e-10.
+`test/reference/thresholds_port.py` is a Float64 Python port of the Julia design
+(classes, occupation times), checked against the reference to 5e-13. The engine
+also checks, for every row, that T(0+) = m(1), P(0+) = 1 and that m(1) agrees with
+the Samaniego decomposition with the committed signature.
+
+### Run on the cluster
+
+    git pull
+    module purge; module load softwares; module load Julia/1.10.4-linux-x86_64
+    srun --partition=compute-slim --ntasks=1 --cpus-per-task=1 --mem=2G --time=00:30:00 \
+        julia --project=. -e 'using Pkg; Pkg.precompile(); Pkg.test()'
+    sbatch --array=1-12,14-18,20,22 templates/run_system.sbatch                       # n <= 27
+    sbatch --array=13,19,21 --mem=24G --time=12:00:00 templates/run_system.sbatch     # n = 30
+    grep -l "FAILED" logs/thresholds_*.out
+    ls output/thresholds/row_*[0-9].csv | wc -l                                       # 682 when complete
+    srun --partition=compute-slim --ntasks=1 --mem=1G --time=00:10:00 \
+        julia --project=. scripts/summarize_thresholds.jl                             # output/thresholds_summary.csv
+
+### Computational effort
+
+`scripts/benchmark_sweep.jl` times, per system and on one core, the enumeration
+needed for the signature of the complete system, the sweep (Algorithm alg), and the
+sweep that also computes the MTTF of every state under the 31 models, and checks the
+per-state MTTF against the classes (`output/benchmark/sweep_<name>.csv`):
+
+    sbatch --array=1-12,14-18,20,22 templates/benchmark_sweep.sbatch
+    sbatch --array=13,19,21 --mem=24G --time=12:00:00 templates/benchmark_sweep.sbatch
+
 ## Layout
 
-- `src/` reusable code (systems, signatures, failure models)
+- `src/` reusable code (systems, signatures, failure models, per-state sweep, threshold policies, grid)
 - `scripts/` entry points
 - `templates/` Slurm job templates
-- `data/systems/` system definitions; `data/signatures/` computed signatures (committed)
+- `data/systems/` system definitions; `data/signatures/` computed signatures; `data/grid.csv` experiment grid (all committed)
 - `test/reference/` independent reference values used by the tests
 - `output/`, `logs/` results and job logs (git-ignored)
