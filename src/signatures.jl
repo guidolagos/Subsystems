@@ -271,7 +271,7 @@ function read_signature_file(path::AbstractString)
     meta = Dict{String,String}()
     for line in eachline(path)
         startswith(line, "#") || continue
-        m = match(r"^#\s*([A-Za-z_]+)\s*=\s*(.*)$", line)
+        m = match(r"^#\s*([A-Za-z_0-9]+)\s*=\s*(.*)$", line)
         m === nothing || (meta[m.captures[1]] = strip(m.captures[2]))
     end
     header, rows = read_simple_csv(path)
