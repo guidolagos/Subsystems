@@ -1,0 +1,11 @@
+.DS_Store
+.vscode/
+output/*
+!output/.gitkeep
+logs/*
+!logs/.gitkeep
+*.jl.*.cov
+*.jl.mem
+# temporary files of atomic writes
+*.tmp.*
+__pycache__/
