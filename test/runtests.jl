@@ -319,6 +319,17 @@ end
         @test readdir(dir) == ["c.bin"]
     end
 
+    @testset "sweep: per-state MTTF sums (benchmark mode) equal the class-based sums" begin
+        sys = get_system(systems, 6)
+        tabs = [model_tables(lfmo_model(name, b), 14) for (name, b) in (("Exp", "0"), ("BFR", "0.5"), ("LSh", "0.2"))]
+        res = sweep(sys; deltas = [mt.delta for mt in tabs])
+        for (i, mt) in enumerate(tabs)
+            s = sum(k * class_mttf(mt, view(res.levels[w + 1].W, :, c), w)
+                    for w in 1:14 for (c, k) in enumerate(res.levels[w + 1].mult))
+            @test isapprox(res.mttf_sums[i], s; rtol = 1e-13)
+        end
+    end
+
     @testset "model tables: δ, τ and order statistics" begin
         n = 12
         mt = model_tables(lfmo_model("Exp", "0"), n)

@@ -83,7 +83,8 @@ Algorithm alg: counting vectors of all 2^n states, grouped into classes.
   state (tests on small systems only).
 - `deltas`: tables `D[w, k+1]` (as `ModelTables.delta`); for each one, the MTTF of
   every working state is computed on the fly as Σ_k W^x_k / binomial(w,k) D[w,k+1]
-  and summed into `mttf_sums` (benchmark of the per-state computation).
+  and summed into `mttf_sums` (benchmark of the per-state computation; compensated
+  summation, since a plain Float64 sum of 2^30 terms loses up to ~1e-7 relative).
 """
 function sweep(cs::CompiledSystem; record::Union{Nothing,Dict{UInt64,Vector{Int}}} = nothing,
                deltas::Vector{Matrix{Float64}} = Matrix{Float64}[])
@@ -102,11 +103,12 @@ function sweep(cs::CompiledSystem; record::Union{Nothing,Dict{UInt64,Vector{Int}
     mps = 0
     evals = 1
     sums = zeros(Float64, length(deltas))
+    comps = zeros(Float64, length(deltas))     # Kahan compensations of `sums`
     peak = sizeof(prev)
     for w in 1:n
         cur = zeros(level_eltype(w), w + 1, B[n + 1, w + 1])
         peak = max(peak, sizeof(prev) + sizeof(cur))
-        lev, nw, nm = _sweep_level!(cur, prev, cs, w, B, record, deltas, sums)
+        lev, nw, nm = _sweep_level!(cur, prev, cs, w, B, record, deltas, sums, comps)
         push!(levels, lev)
         working[w + 1] = nw
         mps += nm
@@ -120,7 +122,7 @@ end
 
 function _sweep_level!(cur::Matrix{T}, prev::Matrix{S}, cs::CompiledSystem, w::Int,
                        B::Matrix{Int}, record, deltas::Vector{Matrix{Float64}},
-                       sums::Vector{Float64}) where {T<:Unsigned,S<:Unsigned}
+                       sums::Vector{Float64}, comps::Vector{Float64}) where {T<:Unsigned,S<:Unsigned}
     nstates = size(cur, 2)
     pos = zeros(Int, w)              # bit positions (0-based) of the working components, increasing
     prefix = zeros(Int, w + 1)       # prefix[r] = Σ_{i<r} binomial(pos_i, i)
@@ -184,7 +186,11 @@ function _sweep_level!(cur::Matrix{T}, prev::Matrix{S}, cs::CompiledSystem, w::I
                 for k in 0:(w - 1)
                     @inbounds s += cur[k + 1, idx] / B[w + 1, k + 1] * D[w, k + 1]
                 end
-                sums[mi] += s
+                # compensated (Kahan) summation: up to 2^34 terms
+                yk = s - comps[mi]
+                tk = sums[mi] + yk
+                comps[mi] = (tk - sums[mi]) - yk
+                sums[mi] = tk
             end
         else
             record === nothing || (record[x] = zeros(Int, w + 1))

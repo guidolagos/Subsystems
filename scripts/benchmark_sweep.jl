@@ -30,17 +30,23 @@ function bench(sys)
     res = sweep(cs)
     check_sweep(res, W)
     res2 = sweep(cs; deltas = [mt.delta for mt in tabs])
-    # per-state sums vs classes
+    # per-state sums vs classes (both with compensated summation)
+    maxrel = 0.0
     for (i, mt) in enumerate(tabs)
-        s = 0.0
+        s = 0.0; comp = 0.0
         for w in 1:n, (c, k) in enumerate(res.levels[w + 1].mult)
-            s += k * class_mttf(mt, view(res.levels[w + 1].W, :, c), w)
+            y = k * class_mttf(mt, view(res.levels[w + 1].W, :, c), w) - comp
+            t = s + y
+            comp = (t - s) - y
+            s = t
         end
-        isapprox(s, res2.mttf_sums[i]; rtol = 1e-9) || error("$(sys.name): per-state MTTF sum differs from classes (model $(i))")
+        rel = abs(s - res2.mttf_sums[i]) / s
+        maxrel = max(maxrel, rel)
+        rel <= 1e-11 || error("$(sys.name): per-state MTTF sum $(res2.mttf_sums[i]) differs from classes $(s) (model $(i), relative $(rel))")
     end
     return (n = n, t_enum = t_enum, t_sweep = res.seconds, t_sweep_mttf = res2.seconds, t_tab = t_tab,
             working = sum(res.working), classes = nclasses(res), mps = res.mps, bytes = res.level_bytes,
-            evals = res.phi_evals)
+            evals = res.phi_evals, maxrel = maxrel)
 end
 
 function main(args)
@@ -54,10 +60,10 @@ function main(args)
         b = bench(sys)
         io = IOBuffer()
         println(io, "name,n,seconds_enum,seconds_sweep,seconds_sweep_mttf,seconds_tables,phi_evals,",
-                "working_states,classes,mps,level_bytes,julia_version,host")
+                "working_states,classes,mps,level_bytes,mttf_check_rel,julia_version,host")
         println(io, sys.name, ",", b.n, ",", round(b.t_enum; digits = 3), ",", round(b.t_sweep; digits = 3), ",",
                 round(b.t_sweep_mttf; digits = 3), ",", round(b.t_tab; digits = 3), ",", b.evals, ",", b.working, ",",
-                b.classes, ",", b.mps, ",", b.bytes, ",", VERSION, ",", Subsystems._hostname())
+                b.classes, ",", b.mps, ",", b.bytes, ",", b.maxrel, ",", VERSION, ",", Subsystems._hostname())
         path = joinpath(Subsystems.BENCH_DIR, "sweep_$(sys.name).csv")
         Subsystems.atomic_write(path, take!(io))
         println("        enum $(round(b.t_enum; digits = 2)) s, sweep $(round(b.t_sweep; digits = 2)) s, ",
