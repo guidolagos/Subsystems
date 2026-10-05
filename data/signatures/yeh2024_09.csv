@@ -1,0 +1,28 @@
+# Subsystems structural signature
+# system = 9
+# name = yeh2024_09
+# label = 9
+# directed = false
+# source = Start
+# target = End
+# n_components = 12
+# n_nodes = 8
+# method = exhaustive enumeration of all 2^n states (source-target connectivity)
+# seconds = 0.056
+# threads = 1
+# julia_version = 1.10.4
+# host = compute-slim-0-10.mansci.uai.cl
+k,W,binomial,tail_signature,signature,signature_float
+0,1,1,1/1,0/1,0.0
+1,12,12,1/1,0/1,0.0
+2,64,66,32/33,1/33,0.030303030303030304
+3,195,220,39/44,1/12,0.08333333333333333
+4,359,495,359/495,29/180,0.16111111111111112
+5,385,792,35/72,947/3960,0.23914141414141415
+6,213,924,71/308,1417/5544,0.2555916305916306
+7,67,792,67/792,809/5544,0.14592352092352093
+8,12,495,4/165,239/3960,0.060353535353535354
+9,1,220,1/220,13/660,0.019696969696969695
+10,0,66,0/1,1/220,0.004545454545454545
+11,0,12,0/1,0/1,0.0
+12,0,1,0/1,0/1,0.0
