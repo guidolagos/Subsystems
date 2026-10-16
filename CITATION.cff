@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper below."
+title: "Subsystems: computational experiments for per-state signatures and mean time-to-failure"
+type: software
+authors:
+  - family-names: Lagos
+    given-names: Guido
+repository-code: "https://github.com/guidolagos/Subsystems"
+license: MIT
+preferred-citation:
+  type: article
+  title: "Per-State Signatures and Mean Time-to-Failure: An Algorithm for Systems With Simultaneous Failures"
+  authors:
+    - family-names: Lagos
+      given-names: Guido
+    - family-names: Ávila
+      given-names: Simón
+  year: 2026
+  status: preprint
+  url: "https://arxiv.org/abs/2610.22181"
+  identifiers:
+    - type: other
+      value: "arXiv:2610.22181"

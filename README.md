@@ -2,7 +2,7 @@
 
 Computational experiments for the paper *Per-State Signatures and Mean
 Time-to-Failure: An Algorithm for Systems With Simultaneous Failures*
-(G. Lagos, S. Ávila): signatures and mean time-to-failure (MTTF) at all 2^n
+(G. Lagos, S. Ávila; [arXiv:2610.22181](https://arxiv.org/abs/2610.22181)): signatures and mean time-to-failure (MTTF) at all 2^n
 states of a monotone binary system, MTTF-threshold repair policies and their
 long-run cost, under exchangeable failure models with a Markov survivor count
 (Lévy-frailty Marshall-Olkin, LFMO).
@@ -10,6 +10,23 @@ long-run cost, under exchangeable failure models with a Markov survivor count
 The experiment design (systems, failure models and their calibration by the
 pairwise beta factor, cost parameters) follows the companion paper on repair
 policies with delays (repository `Simple-delayed`).
+
+## Paper and citation
+
+The paper is available at <https://arxiv.org/abs/2610.22181> (submitted to
+*IEEE Transactions on Reliability*). If you use this code or the computed
+signatures, please cite the paper:
+
+    @misc{lagos2026persignature,
+      title         = {Per-State Signatures and Mean Time-to-Failure: An Algorithm for Systems With Simultaneous Failures},
+      author        = {Lagos, Guido and {\'A}vila, Sim{\'o}n},
+      year          = {2026},
+      eprint        = {2610.22181},
+      archivePrefix = {arXiv},
+      url           = {https://arxiv.org/abs/2610.22181}
+    }
+
+The "Cite this repository" button of GitHub uses `CITATION.cff`.
 
 ## Setup
 
